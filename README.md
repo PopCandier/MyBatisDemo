@@ -330,6 +330,38 @@ public class ExampleObjectFactory extends DefaultObjectFactory {
 #### 动态SQL
 
 ```xml
+<!--
+UPDATE categories SET
+    display_order = CASE id
+        WHEN 1 THEN 3
+        WHEN 2 THEN 4
+        WHEN 3 THEN 5
+    END,
+    title = CASE id
+        WHEN 1 THEN 'New Title 1'
+        WHEN 2 THEN 'New Title 2'
+        WHEN 3 THEN 'New Title 3'
+    END
+WHERE id IN (1,2,3)
+-->
+<!-- List 批量更新 -->
+	<update id="upldateList">
+		update blog set 
+		name = 
+		<!-- open 的参数为  开头，separator 分割 close 结束 批量更新中，有多少符合条件地，就会有多少 when 与 then-->
+		<foreach collection="list" item="blogs" index="index" separator=" " open="case bid" close="end">
+			when #{blogs.bid} then #{blogs.name}
+		</foreach>
+		,author_id = 
+		<foreach collection="list" item="blogs" index="index" separator=" " open="case bid" close="end">
+			when #{blogs.bid} then #{blogs.authorId}
+		</foreach>
+		where bid in 
+		<foreach collection="list" item="item" open="(" separator="," close=")">
+			#{item.bid,JdbcType=INTEGER}
+		</foreach>
+	</update>
+
 <!-- List 批量删除  -->
     <delete id="deleteByList" parameterType="java.util.List">
         delete from tbl_emp where emp_id in
