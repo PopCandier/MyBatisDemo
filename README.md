@@ -1814,3 +1814,150 @@ public final class SqlSessionHolder extends ResourceHolderSupport {
 ```
 
 基本可以认为每个线程都可以支持自己的SqlSession，所以线程安全。
+
+#### 总结mybatis-spring的具体流程
+
+mybatis如何与spring进行整合，是依靠与spring提供的扩展点来完整
+
+```xml
+<dependency>
+            <groupId>org.mybatis</groupId>
+            <artifactId>mybatis-spring</artifactId>
+    <version>用最新的就好了，用老旧的可以存在兼容问题</version>
+        </dependency>
+```
+
+首先要声明的是mybatis自己的本身逻辑。
+
+将.xml文件和接口mapper关联起来，并执行sql语句，并匹配对应的结果集，语句集，执行器等操作。
+
+这里匹配语句集开始，后面的流程可以不关，最主要是几个mybatis关键的对象如何创建。
+
+涉及，SqlSession，SqlSessionFactory，具体的mapper如何创建等，后面的话，就按照本身的mybatis流程就可以了
+
+* mybatis-spring 中几个核心对象
+
+  * SqlSessionFactoryBean
+
+    * ```
+      FactoryBean<SqlSessionFactory>, InitializingBean, ApplicationListener<ApplicationEvent>
+      ```
+
+    * FactoryBean 和 InitializingBean保证SqlSessionFactory可以正确初始化，后者用于监听spring上下文中的事件，这里用于监听你感兴趣的时间，这里你可以理解成对本身内容的mybatis体系里的内容扫描，包括全局配置文件，mybatis-config.xml文件的Configuration对象的初始化
+
+    * ```
+      SqlSessionFactoryBean#buildSqlSessionFactory()
+      ```
+
+  * MybatisPlusAutoConfiguration
+
+    * ```java
+      @Configuration
+      @ConditionalOnClass({SqlSessionFactory.class, SqlSessionFactoryBean.class})
+      @ConditionalOnSingleCandidate(DataSource.class)
+      @EnableConfigurationProperties({MybatisPlusProperties.class})
+      @AutoConfigureAfter({DataSourceAutoConfiguration.class})
+      public class MybatisPlusAutoConfiguration implements InitializingBean {
+          
+       //... 完成对SqlSessionTemplate 的对象注入，以及没写上去的DataSource对象注入
+       @Bean
+          @ConditionalOnMissingBean
+          public SqlSessionTemplate sqlSessionTemplate(SqlSessionFactory sqlSessionFactory) {
+              ExecutorType executorType = this.properties.getExecutorType();
+              return executorType != null ? new SqlSessionTemplate(sqlSessionFactory, executorType) : new SqlSessionTemplate(sqlSessionFactory);
+          }
+      ```
+
+  * SqlSessionTemplate
+
+    * 作为接管原生的`DefaultSqlSession`的替换方案，他在创建`SqlSessoion`对象的时候，采取了使用代理类来创建`SqlSession`
+
+    * SqlSessionTemplate实现了SqlSession的接口，而利于委托和动态代理实际交给了SqlSessionInterecptor对象来掌管SqlSession的创建。
+
+    * ```java
+      public SqlSessionTemplate(SqlSessionFactory sqlSessionFactory, ExecutorType executorType,
+            PersistenceExceptionTranslator exceptionTranslator) {
+      
+          notNull(sqlSessionFactory, "Property 'sqlSessionFactory' is required");
+          notNull(executorType, "Property 'executorType' is required");
+      
+          this.sqlSessionFactory = sqlSessionFactory;
+          this.executorType = executorType;
+          this.exceptionTranslator = exceptionTranslator;
+          //动态代理初始化
+          this.sqlSessionProxy = (SqlSession) newProxyInstance(SqlSessionFactory.class.getClassLoader(),
+              new Class[] { SqlSession.class }, new SqlSessionInterceptor());
+        }
+      //实例化
+      
+      //方法调用交给了委托对象
+      @Override
+        public <T> T selectOne(String statement, Object parameter) {
+          return this.sqlSessionProxy.selectOne(statement, parameter);
+        }
+      
+      //实际调用过程
+      //SqlSessionInterceptor.java
+      private class SqlSessionInterceptor implements InvocationHandler {
+          @Override
+          public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            SqlSession sqlSession = 
+       // 使用ThreadLocal来保证创建线程安全的SqlSession对象
+                getSqlSession(SqlSessionTemplate.this.sqlSessionFactory,
+                SqlSessionTemplate.this.executorType, SqlSessionTemplate.this.exceptionTranslator);
+            try {
+                //调用原来的sqlSession的方法
+              Object result = method.invoke(sqlSession, args);
+              if (!isSqlSessionTransactional(sqlSession, SqlSessionTemplate.this.sqlSessionFactory)) {
+                // force commit even on non-dirty sessions because some databases require
+                // a commit/rollback before calling close()
+                sqlSession.commit(true);
+              }
+            //...    
+      ```
+
+  * MapperScannerConfigurer
+
+    * 目前位置，SqlSession和SqlSessionFactory对象已经创建完毕，现在需要的是Mapper对象，要如何和SqlSession关联起来。
+
+    * ```java
+      public class MapperScannerConfigurer
+          implements BeanDefinitionRegistryPostProcessor, InitializingBean, ApplicationContextAware, BeanNameAware
+          
+      //该对象保证被扫描到的Mapper接口对象，进入IOC容器的时候进行的操作，主要是在于实现的BeanDefinitionRegistryPostProcessor接口
+      //更多细节参考上面的mapper的总结
+      //总之，在这一步进入ioc容器的是MapperFactoryBean
+      ```
+
+  * SqlSessionDaoSupport
+
+    * ```java
+      public abstract class SqlSessionDaoSupport extends DaoSupport {
+      
+        private SqlSessionTemplate sqlSessionTemplate;
+      ```
+
+    * 很明显，这个对象就是用来操作sqlSession对象而诞生的类，也就是用来操作数据库的类
+
+  * MapperFactoryBean
+
+    * ```java
+      MapperFactoryBean<T> extends SqlSessionDaoSupport implements FactoryBean<T>
+      
+      //活动mapper对象，接下来就是mybatis自己的流程了，通过@Autowire注入使用
+      @Override
+        public T getObject() throws Exception {
+          return getSqlSession().getMapper(this.mapperInterface);
+        }
+      ```
+
+      
+
+
+
+
+
+
+
+ 
+
